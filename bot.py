@@ -1,12 +1,9 @@
-
 import os
 import time
 import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-# private repo면 이 방식 대신 GitHub API + PAT가 필요합니다.
 HALTS_URL = "https://raw.githubusercontent.com/K-CYL/telegram-halt-bot/main/halts.json"
 
 
@@ -53,6 +50,14 @@ def load_halts():
 
 def normalize_text(value):
     return str(value or "").strip()
+
+
+def has_resume_info(item):
+    return bool(
+        normalize_text(item.get("resume_date"))
+        or normalize_text(item.get("quote_resume_time"))
+        or normalize_text(item.get("trade_resume_time"))
+    )
 
 
 def parse_query(text):
@@ -102,15 +107,27 @@ def format_halt_message(item):
     halt_date = normalize_text(item.get("date", "-")) or "-"
     halt_time = normalize_text(item.get("time", "-")) or "-"
 
-    return (
-        "현재 거래정지 상태입니다.\n\n"
-        f"종목코드 : {symbol}\n"
-        f"종목명 : {name}\n"
-        f"거래소 : {market}\n"
-        f"정지 사유 : {reason}\n"
-        f"정지일 : {halt_date}\n"
-        f"정지시간 : {halt_time}"
-    )
+    lines = [
+        "현재 거래정지 상태입니다.",
+        "",
+        f"종목코드 : {symbol}",
+        f"종목명 : {name}",
+        f"거래소 : {market}",
+        f"정지 사유 : {reason}",
+        f"정지일 : {halt_date}",
+        f"정지시간 : {halt_time}",
+    ]
+
+    if has_resume_info(item):
+        resume_date = normalize_text(item.get("resume_date", "-")) or "-"
+        quote_resume_time = normalize_text(item.get("quote_resume_time", "-")) or "-"
+        trade_resume_time = normalize_text(item.get("trade_resume_time", "-")) or "-"
+
+        lines.append(f"재개일 : {resume_date}")
+        lines.append(f"호가재개시간 : {quote_resume_time}")
+        lines.append(f"거래재개시간 : {trade_resume_time}")
+
+    return "\n".join(lines)
 
 
 def search_halt(query, halts):
@@ -155,12 +172,14 @@ def debug_halt(query, halts):
 
 
 def format_halt_list(halts):
-    if not halts:
+    active_items = [x for x in halts if not has_resume_info(x)]
+
+    if not active_items:
         return "현재 거래정지 종목이 없습니다."
 
-    lines = [f"현재 거래정지 종목 ({len(halts)})", ""]
+    lines = [f"현재 거래정지 종목 ({len(active_items)})", ""]
 
-    for item in halts:
+    for item in active_items:
         symbol = normalize_text(item.get("symbol", "-")) or "-"
         name = normalize_text(item.get("name", "-")) or "-"
         reason = normalize_text(item.get("reason", "-")) or "-"
@@ -168,12 +187,11 @@ def format_halt_list(halts):
 
     text = "\n".join(lines)
 
-    # 텔레그램 메시지 길이 방지
     if len(text) > 3500:
-        trimmed = [f"현재 거래정지 종목 ({len(halts)})", ""]
+        trimmed = [f"현재 거래정지 종목 ({len(active_items)})", ""]
         current_len = len("\n".join(trimmed))
 
-        for item in halts:
+        for item in active_items:
             line = f"{normalize_text(item.get('symbol', '-'))} - {normalize_text(item.get('name', '-'))} / {normalize_text(item.get('reason', '-'))}"
             if current_len + len(line) + 1 > 3500:
                 trimmed.append("...")
@@ -209,9 +227,9 @@ def format_reason_list(reason_code, items):
         return "사용법: /reason T1"
 
     if not items:
-        return f"{rc} 코드에 해당하는 현재 거래정지 종목이 없습니다."
+        return f"{rc} 코드에 해당하는 RSS 종목이 없습니다."
 
-    lines = [f"{rc} 코드 현재 거래정지 종목 ({len(items)})", ""]
+    lines = [f"{rc} 코드 RSS 종목 ({len(items)})", ""]
 
     for item in items:
         symbol = normalize_text(item.get("symbol", "-")) or "-"
@@ -223,7 +241,7 @@ def format_reason_list(reason_code, items):
     text = "\n".join(lines)
 
     if len(text) > 3500:
-        trimmed = [f"{rc} 코드 현재 거래정지 종목 ({len(items)})", ""]
+        trimmed = [f"{rc} 코드 RSS 종목 ({len(items)})", ""]
         current_len = len("\n".join(trimmed))
 
         for item in items:
@@ -255,7 +273,7 @@ def handle_text(text):
     if command == "HELP":
         return (
             "사용 방법\n\n"
-            "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
+            "종목코드 또는 종목명을 입력하면 RSS 기준 거래정지 종목 여부를 알려드립니다.\n\n"
             "예시:\n"
             "IMMP\n"
             "/halt IMMP\n\n"
