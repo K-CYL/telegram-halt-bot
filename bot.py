@@ -1,12 +1,12 @@
+
 import os
-import json
 import time
 import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# GitHub raw URL
+# private repo면 이 방식 대신 GitHub API + PAT가 필요합니다.
 HALTS_URL = "https://raw.githubusercontent.com/K-CYL/telegram-halt-bot/main/halts.json"
 
 
@@ -59,30 +59,39 @@ def parse_query(text):
     text = normalize_text(text)
 
     if not text:
-        return ""
-
-    if text.lower().startswith("/halt"):
-        parts = text.split(maxsplit=1)
-        if len(parts) == 2:
-            return parts[1].strip()
-        return ""
+        return ("EMPTY", "")
 
     if text.startswith("/start") or text.startswith("/help"):
-        return "__HELP__"
+        return ("HELP", "")
 
     if text.startswith("/haltscount"):
-        return "__HALTSCOUNT__"
+        return ("HALTSCOUNT", "")
+
+    if text.startswith("/haltlist"):
+        return ("HALTLIST", "")
 
     if text.lower().startswith("/debughalt"):
         parts = text.split(maxsplit=1)
         if len(parts) == 2:
-            return f"__DEBUGHALT__::{parts[1].strip()}"
-        return "__DEBUGHALT__::"
+            return ("DEBUGHALT", parts[1].strip())
+        return ("DEBUGHALT", "")
+
+    if text.lower().startswith("/reason"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            return ("REASON", parts[1].strip())
+        return ("REASON", "")
+
+    if text.lower().startswith("/halt"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            return ("HALT", parts[1].strip())
+        return ("HALT", "")
 
     if text.startswith("/"):
-        return ""
+        return ("UNKNOWN", "")
 
-    return text.strip()
+    return ("SEARCH", text.strip())
 
 
 def format_halt_message(item):
@@ -145,6 +154,92 @@ def debug_halt(query, halts):
     )
 
 
+def format_halt_list(halts):
+    if not halts:
+        return "현재 거래정지 종목이 없습니다."
+
+    lines = [f"현재 거래정지 종목 ({len(halts)})", ""]
+
+    for item in halts:
+        symbol = normalize_text(item.get("symbol", "-")) or "-"
+        name = normalize_text(item.get("name", "-")) or "-"
+        reason = normalize_text(item.get("reason", "-")) or "-"
+        lines.append(f"{symbol} - {name} / {reason}")
+
+    text = "\n".join(lines)
+
+    # 텔레그램 메시지 길이 방지
+    if len(text) > 3500:
+        trimmed = [f"현재 거래정지 종목 ({len(halts)})", ""]
+        current_len = len("\n".join(trimmed))
+
+        for item in halts:
+            line = f"{normalize_text(item.get('symbol', '-'))} - {normalize_text(item.get('name', '-'))} / {normalize_text(item.get('reason', '-'))}"
+            if current_len + len(line) + 1 > 3500:
+                trimmed.append("...")
+                trimmed.append("목록이 길어 일부만 표시했습니다.")
+                break
+            trimmed.append(line)
+            current_len += len(line) + 1
+
+        return "\n".join(trimmed)
+
+    return text
+
+
+def search_by_reason(reason_query, halts):
+    rq = normalize_text(reason_query).upper()
+    if not rq:
+        return []
+
+    matched = []
+
+    for item in halts:
+        reason_text = normalize_text(item.get("reason"))
+        if f"({rq})" in reason_text.upper():
+            matched.append(item)
+
+    return matched
+
+
+def format_reason_list(reason_code, items):
+    rc = normalize_text(reason_code).upper()
+
+    if not rc:
+        return "사용법: /reason T1"
+
+    if not items:
+        return f"{rc} 코드에 해당하는 현재 거래정지 종목이 없습니다."
+
+    lines = [f"{rc} 코드 현재 거래정지 종목 ({len(items)})", ""]
+
+    for item in items:
+        symbol = normalize_text(item.get("symbol", "-")) or "-"
+        name = normalize_text(item.get("name", "-")) or "-"
+        market = normalize_text(item.get("market", "-")) or "-"
+        reason = normalize_text(item.get("reason", "-")) or "-"
+        lines.append(f"{symbol} - {name} / {market} / {reason}")
+
+    text = "\n".join(lines)
+
+    if len(text) > 3500:
+        trimmed = [f"{rc} 코드 현재 거래정지 종목 ({len(items)})", ""]
+        current_len = len("\n".join(trimmed))
+
+        for item in items:
+            line = f"{normalize_text(item.get('symbol', '-'))} - {normalize_text(item.get('name', '-'))} / {normalize_text(item.get('market', '-'))} / {normalize_text(item.get('reason', '-'))}"
+            if current_len + len(line) + 1 > 3500:
+                trimmed.append("...")
+                trimmed.append("목록이 길어 일부만 표시했습니다.")
+                break
+            trimmed.append(line)
+            current_len += len(line) + 1
+
+        return "\n".join(trimmed)
+
+    return text
+
+
 def extract_message(update):
     if "message" in update:
         return update["message"]
@@ -154,39 +249,49 @@ def extract_message(update):
 
 
 def handle_text(text):
-    query = parse_query(text)
+    command, value = parse_query(text)
     halts = load_halts()
 
-    if query == "__HELP__":
+    if command == "HELP":
         return (
             "사용 방법\n\n"
             "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
             "예시:\n"
             "IMMP\n"
             "/halt IMMP\n\n"
+            "목록/검색:\n"
+            "/haltlist\n"
+            "/reason T1\n\n"
             "디버그:\n"
             "/haltscount\n"
             "/debughalt IMMP"
         )
 
-    if query == "__HALTSCOUNT__":
+    if command == "HALTSCOUNT":
         symbols = [normalize_text(x.get("symbol")) for x in halts[:20]]
         preview = ", ".join(symbols) if symbols else "(없음)"
         return f"현재 halts 개수: {len(halts)}\n앞 20개 심볼: {preview}"
 
-    if query.startswith("__DEBUGHALT__::"):
-        raw = query.split("::", 1)[1]
-        return debug_halt(raw, halts)
+    if command == "HALTLIST":
+        return format_halt_list(halts)
 
-    if not query:
+    if command == "DEBUGHALT":
+        return debug_halt(value, halts)
+
+    if command == "REASON":
+        matched = search_by_reason(value, halts)
+        return format_reason_list(value, matched)
+
+    if command in ("HALT", "SEARCH"):
+        item = search_halt(value, halts)
+        if item:
+            return format_halt_message(item)
+        return "현재 거래정지 종목이 아닙니다."
+
+    if command == "UNKNOWN":
         return None
 
-    item = search_halt(query, halts)
-
-    if item:
-        return format_halt_message(item)
-
-    return "현재 거래정지 종목이 아닙니다."
+    return None
 
 
 def main():
