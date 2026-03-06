@@ -1,87 +1,208 @@
 import os
 import json
-import requests
 import time
+import requests
 
-TOKEN = os.environ["BOT_TOKEN"]
-
-URL = f"https://api.telegram.org/bot{TOKEN}"
-
-HALT_FILE = "halts.json"
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+HALTS_FILE = "halts.json"
 
 
-def get_updates(offset=None):
-    r = requests.get(URL + "/getUpdates", params={"offset": offset})
+def get_updates(offset=None, timeout=30):
+    params = {
+        "timeout": timeout,
+    }
+    if offset is not None:
+        params["offset"] = offset
+
+    r = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=timeout + 10)
+    r.raise_for_status()
     return r.json()
 
 
-def send(chat_id, text):
-    requests.post(URL + "/sendMessage", json={
+def send_message(chat_id, text, reply_to_message_id=None):
+    payload = {
         "chat_id": chat_id,
-        "text": text
-    })
+        "text": text,
+    }
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+
+    r = requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 
 def load_halts():
-    if not os.path.exists(HALT_FILE):
+    if not os.path.exists(HALTS_FILE):
         return []
-    with open(HALT_FILE, "r") as f:
-        return json.load(f)
+
+    with open(HALTS_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, list):
+        return data
+
+    return []
 
 
-def search(symbol):
+def normalize_text(value):
+    return str(value or "").strip()
 
-    halts = load_halts()
 
-    symbol = symbol.upper()
+def parse_query(text):
+    text = normalize_text(text)
 
-    for h in halts:
-        if h["symbol"] == symbol:
-            return h
+    if not text:
+        return ""
+
+    if text.lower().startswith("/halt"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            return parts[1].strip()
+        return ""
+
+    if text.startswith("/start"):
+        return "__START__"
+
+    if text.startswith("/help"):
+        return "__HELP__"
+
+    if text.startswith("/"):
+        return ""
+
+    return text.strip()
+
+
+def format_halt_message(item):
+    symbol = normalize_text(item.get("symbol", "-")) or "-"
+    name = normalize_text(item.get("name", "-")) or "-"
+    market = normalize_text(item.get("market", "-")) or "-"
+    reason = normalize_text(item.get("reason", "-")) or "-"
+    halt_date = normalize_text(item.get("date", "-")) or "-"
+    halt_time = normalize_text(item.get("time", "-")) or "-"
+
+    return (
+        "현재 거래정지 상태입니다.\n\n"
+        f"종목코드 : {symbol}\n"
+        f"종목명 : {name}\n"
+        f"거래소 : {market}\n"
+        f"정지 사유 : {reason}\n"
+        f"정지일 : {halt_date}\n"
+        f"정지시간 : {halt_time}"
+    )
+
+
+def search_halt(query, halts):
+    q = normalize_text(query).lower()
+    if not q:
+        return None
+
+    # 1순위: 종목코드 정확히 일치
+    for item in halts:
+        symbol = normalize_text(item.get("symbol")).lower()
+        if symbol == q:
+            return item
+
+    # 2순위: 종목명 정확히 일치
+    for item in halts:
+        name = normalize_text(item.get("name")).lower()
+        if name == q:
+            return item
+
+    # 3순위: 종목명 부분 일치
+    for item in halts:
+        name = normalize_text(item.get("name")).lower()
+        if q in name:
+            return item
 
     return None
 
 
-offset = None
+def extract_message(update):
+    if "message" in update:
+        return update["message"]
 
-while True:
+    if "channel_post" in update:
+        return update["channel_post"]
 
-    updates = get_updates(offset)
+    return None
 
-    if updates["result"]:
 
-        for u in updates["result"]:
+def handle_text(text):
+    query = parse_query(text)
 
-            offset = u["update_id"] + 1
+    if query == "__START__":
+        return (
+            "사용 방법\n\n"
+            "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
+            "예시:\n"
+            "SOXL\n"
+            "/halt SOXL"
+        )
 
-            if "message" not in u:
+    if query == "__HELP__":
+        return (
+            "사용 방법\n\n"
+            "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
+            "예시:\n"
+            "SOXL\n"
+            "/halt SOXL"
+        )
+
+    if not query:
+        return None
+
+    halts = load_halts()
+    item = search_halt(query, halts)
+
+    if item:
+        return format_halt_message(item)
+
+    return "현재 거래정지 종목이 아닙니다."
+
+
+def main():
+    print("Bot started.", flush=True)
+
+    offset = None
+
+    while True:
+        try:
+            data = get_updates(offset=offset, timeout=30)
+
+            if not data.get("ok"):
+                print(f"Telegram API error: {data}", flush=True)
+                time.sleep(3)
                 continue
 
-            chat = u["message"]["chat"]["id"]
-            text = u["message"].get("text", "").strip()
+            results = data.get("result", [])
 
-            if not text:
-                continue
+            for update in results:
+                offset = update["update_id"] + 1
 
-            result = search(text)
+                message = extract_message(update)
+                if not message:
+                    continue
 
-            if result:
+                chat = message.get("chat", {})
+                chat_id = chat.get("id")
+                message_id = message.get("message_id")
+                text = message.get("text", "")
 
-                msg = f"""
-현재 거래정지 상태입니다.
+                if not chat_id or not text:
+                    continue
 
-종목코드 : {result['symbol']}
-종목명 : {result['name']}
-거래소 : {result['market']}
-정지 사유 : {result['reason']}
-정지일 : {result['date']}
-정지시간 : {result['time']}
-"""
+                reply = handle_text(text)
+                if not reply:
+                    continue
 
-            else:
+                send_message(chat_id, reply, reply_to_message_id=message_id)
 
-                msg = "현재 거래정지 종목이 아닙니다."
+        except Exception as e:
+            print(f"Error: {e}", flush=True)
+            time.sleep(5)
 
-            send(chat, msg)
 
-    time.sleep(3)
+if __name__ == "__main__":
+    main()
