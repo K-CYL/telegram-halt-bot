@@ -9,9 +9,7 @@ HALTS_FILE = "halts.json"
 
 
 def get_updates(offset=None, timeout=30):
-    params = {
-        "timeout": timeout,
-    }
+    params = {"timeout": timeout}
     if offset is not None:
         params["offset"] = offset
 
@@ -42,7 +40,6 @@ def load_halts():
 
     if isinstance(data, list):
         return data
-
     return []
 
 
@@ -62,10 +59,7 @@ def parse_query(text):
             return parts[1].strip()
         return ""
 
-    if text.startswith("/start"):
-        return "__START__"
-
-    if text.startswith("/help"):
+    if text.startswith("/start") or text.startswith("/help"):
         return "__HELP__"
 
     if text.startswith("/"):
@@ -98,19 +92,16 @@ def search_halt(query, halts):
     if not q:
         return None
 
-    # 1순위: 종목코드 정확히 일치
     for item in halts:
         symbol = normalize_text(item.get("symbol")).lower()
         if symbol == q:
             return item
 
-    # 2순위: 종목명 정확히 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if name == q:
             return item
 
-    # 3순위: 종목명 부분 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if q in name:
@@ -122,24 +113,13 @@ def search_halt(query, halts):
 def extract_message(update):
     if "message" in update:
         return update["message"]
-
     if "channel_post" in update:
         return update["channel_post"]
-
     return None
 
 
 def handle_text(text):
     query = parse_query(text)
-
-    if query == "__START__":
-        return (
-            "사용 방법\n\n"
-            "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
-            "예시:\n"
-            "SOXL\n"
-            "/halt SOXL"
-        )
 
     if query == "__HELP__":
         return (
@@ -164,7 +144,6 @@ def handle_text(text):
 
 def main():
     print("Bot started.", flush=True)
-
     offset = None
 
     while True:
