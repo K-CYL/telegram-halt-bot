@@ -1,5 +1,8 @@
 import os
 import time
+from collections import Counter
+from datetime import datetime
+
 import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -52,6 +55,34 @@ def normalize_text(value):
     return str(value or "").strip()
 
 
+def parse_mmddyyyy(date_str):
+    raw = normalize_text(date_str)
+    if not raw:
+        return None
+
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def extract_reason_code(reason_text):
+    text = normalize_text(reason_text)
+    if not text:
+        return ""
+
+    if "(" in text and ")" in text:
+        left = text.rfind("(")
+        right = text.rfind(")")
+        if left != -1 and right != -1 and right > left:
+            return text[left + 1:right].strip().upper()
+
+    return text.strip().upper()
+
+
 def has_resume_info(item):
     return bool(
         normalize_text(item.get("resume_date"))
@@ -74,6 +105,15 @@ def parse_query(text):
 
     if text.startswith("/haltlist"):
         return ("HALTLIST", "")
+
+    if text.startswith("/todayhalt"):
+        return ("TODAYHALT", "")
+
+    if text.startswith("/resume"):
+        return ("RESUME", "")
+
+    if text.startswith("/topreason"):
+        return ("TOPREASON", "")
 
     if text.lower().startswith("/debughalt"):
         parts = text.split(maxsplit=1)
@@ -156,7 +196,7 @@ def search_halt(query, halts):
 def debug_halt(query, halts):
     q = normalize_text(query).lower()
     if not q:
-        return "사용법: /debughalt IMMP"
+        return "사용법: /debughalt EMPG"
 
     symbols = [normalize_text(x.get("symbol")) for x in halts]
     exists = any(normalize_text(x.get("symbol")).lower() == q for x in halts)
@@ -213,8 +253,8 @@ def search_by_reason(reason_query, halts):
     matched = []
 
     for item in halts:
-        reason_text = normalize_text(item.get("reason"))
-        if f"({rq})" in reason_text.upper():
+        reason_code = extract_reason_code(item.get("reason"))
+        if reason_code == rq:
             matched.append(item)
 
     return matched
@@ -224,7 +264,7 @@ def format_reason_list(reason_code, items):
     rc = normalize_text(reason_code).upper()
 
     if not rc:
-        return "사용법: /reason T1"
+        return "사용법: /reason T12"
 
     if not items:
         return f"{rc} 코드에 해당하는 RSS 종목이 없습니다."
@@ -258,6 +298,105 @@ def format_reason_list(reason_code, items):
     return text
 
 
+def format_todayhalt(halts):
+    if not halts:
+        return "RSS 종목이 없습니다."
+
+    dates = [parse_mmddyyyy(x.get("date")) for x in halts]
+    dates = [d for d in dates if d is not None]
+
+    if not dates:
+        return "날짜 정보가 없습니다."
+
+    latest_date = max(dates)
+    items = [
+        x for x in halts
+        if parse_mmddyyyy(x.get("date")) == latest_date and not has_resume_info(x)
+    ]
+
+    if not items:
+        return f"오늘({latest_date.strftime('%m/%d/%Y')}) 발생한 현재 거래정지 종목이 없습니다."
+
+    lines = [f"오늘 발생한 halt ({latest_date.strftime('%m/%d/%Y')}) / {len(items)}", ""]
+
+    for item in items:
+        symbol = normalize_text(item.get("symbol", "-")) or "-"
+        name = normalize_text(item.get("name", "-")) or "-"
+        reason = normalize_text(item.get("reason", "-")) or "-"
+        halt_time = normalize_text(item.get("time", "-")) or "-"
+        lines.append(f"{symbol} - {name} / {reason} / {halt_time}")
+
+    return "\n".join(lines)
+
+
+def format_resume_list(halts):
+    items = [x for x in halts if has_resume_info(x)]
+
+    if not items:
+        return "재개 정보가 있는 종목이 없습니다."
+
+    items.sort(key=lambda x: (normalize_text(x.get("resume_date")), normalize_text(x.get("symbol"))))
+
+    lines = [f"재개 예정/재개 정보 종목 ({len(items)})", ""]
+
+    for item in items:
+        symbol = normalize_text(item.get("symbol", "-")) or "-"
+        name = normalize_text(item.get("name", "-")) or "-"
+        resume_date = normalize_text(item.get("resume_date", "-")) or "-"
+        quote_resume_time = normalize_text(item.get("quote_resume_time", "-")) or "-"
+        trade_resume_time = normalize_text(item.get("trade_resume_time", "-")) or "-"
+        lines.append(
+            f"{symbol} - {name} / 재개일 {resume_date} / 호가 {quote_resume_time} / 거래 {trade_resume_time}"
+        )
+
+    text = "\n".join(lines)
+
+    if len(text) > 3500:
+        trimmed = [f"재개 예정/재개 정보 종목 ({len(items)})", ""]
+        current_len = len("\n".join(trimmed))
+
+        for item in items:
+            line = (
+                f"{normalize_text(item.get('symbol', '-'))} - "
+                f"{normalize_text(item.get('name', '-'))} / "
+                f"재개일 {normalize_text(item.get('resume_date', '-'))} / "
+                f"호가 {normalize_text(item.get('quote_resume_time', '-'))} / "
+                f"거래 {normalize_text(item.get('trade_resume_time', '-'))}"
+            )
+            if current_len + len(line) + 1 > 3500:
+                trimmed.append("...")
+                trimmed.append("목록이 길어 일부만 표시했습니다.")
+                break
+            trimmed.append(line)
+            current_len += len(line) + 1
+
+        return "\n".join(trimmed)
+
+    return text
+
+
+def format_topreason(halts):
+    if not halts:
+        return "RSS 종목이 없습니다."
+
+    counter = Counter()
+
+    for item in halts:
+        reason_code = extract_reason_code(item.get("reason"))
+        if reason_code:
+            counter[reason_code] += 1
+
+    if not counter:
+        return "정지 사유 통계가 없습니다."
+
+    lines = ["현재 RSS 종목 사유 통계", ""]
+
+    for code, count in counter.most_common():
+        lines.append(f"{code} : {count}")
+
+    return "\n".join(lines)
+
+
 def extract_message(update):
     if "message" in update:
         return update["message"]
@@ -275,14 +414,17 @@ def handle_text(text):
             "사용 방법\n\n"
             "종목코드 또는 종목명을 입력하면 RSS 기준 거래정지 종목 여부를 알려드립니다.\n\n"
             "예시:\n"
-            "IMMP\n"
-            "/halt IMMP\n\n"
+            "EMPG\n"
+            "/halt EMPG\n\n"
             "목록/검색:\n"
             "/haltlist\n"
-            "/reason T1\n\n"
+            "/todayhalt\n"
+            "/resume\n"
+            "/reason T12\n"
+            "/topreason\n\n"
             "디버그:\n"
             "/haltscount\n"
-            "/debughalt IMMP"
+            "/debughalt EMPG"
         )
 
     if command == "HALTSCOUNT":
@@ -292,6 +434,15 @@ def handle_text(text):
 
     if command == "HALTLIST":
         return format_halt_list(halts)
+
+    if command == "TODAYHALT":
+        return format_todayhalt(halts)
+
+    if command == "RESUME":
+        return format_resume_list(halts)
+
+    if command == "TOPREASON":
+        return format_topreason(halts)
 
     if command == "DEBUGHALT":
         return debug_halt(value, halts)
