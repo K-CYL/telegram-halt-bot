@@ -413,18 +413,17 @@ def handle_text(text):
         return (
             "사용 방법\n\n"
             "종목코드 또는 종목명을 입력하면 RSS 기준 거래정지 종목 여부를 알려드립니다.\n\n"
-            "예시:\n"
+            "샘플 검색:\n"
             "EMPG\n"
             "/halt EMPG\n\n"
-            "목록/검색:\n"
-            "/haltlist\n"
-            "/todayhalt\n"
-            "/resume\n"
-            "/reason T12\n"
-            "/topreason\n\n"
-            "디버그:\n"
-            "/haltscount\n"
-            "/debughalt EMPG"
+            "명령어:\n"
+            "/haltlist - 현재 거래정지 종목 목록\n"
+            "/todayhalt - 오늘 발생한 halt\n"
+            "/resume - 재개 예정/재개 정보 종목\n"
+            "/reason T12 - 사유 코드별 검색\n"
+            "/topreason - halt 사유 통계\n"
+            "/haltscount - 현재 저장 종목 수 확인\n"
+            "/debughalt EMPG - 특정 종목 디버그\n"
         )
 
     if command == "HALTSCOUNT":
