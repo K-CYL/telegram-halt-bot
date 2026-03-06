@@ -5,7 +5,9 @@ import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-HALTS_FILE = "halts.json"
+
+# GitHub raw URL
+HALTS_URL = "https://raw.githubusercontent.com/K-CYL/telegram-halt-bot/main/halts.json"
 
 
 def get_updates(offset=None, timeout=30):
@@ -32,20 +34,18 @@ def send_message(chat_id, text, reply_to_message_id=None):
 
 
 def load_halts():
-    if not os.path.exists(HALTS_FILE):
-        print("halts.json not found", flush=True)
-        return []
-
     try:
-        with open(HALTS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        r = requests.get(HALTS_URL, timeout=20)
+        r.raise_for_status()
+        data = r.json()
 
         if isinstance(data, list):
-            print(f"halts loaded: {len(data)} items", flush=True)
+            print(f"halts loaded from github: {len(data)} items", flush=True)
             return data
 
-        print("halts.json is not a list", flush=True)
+        print("halts.json from github is not a list", flush=True)
         return []
+
     except Exception as e:
         print(f"load_halts error: {e}", flush=True)
         return []
@@ -109,19 +109,16 @@ def search_halt(query, halts):
     if not q:
         return None
 
-    # 1순위: 종목코드 정확히 일치
     for item in halts:
         symbol = normalize_text(item.get("symbol")).lower()
         if symbol == q:
             return item
 
-    # 2순위: 종목명 정확히 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if name == q:
             return item
 
-    # 3순위: 종목명 부분 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if q in name:
