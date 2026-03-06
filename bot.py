@@ -33,14 +33,22 @@ def send_message(chat_id, text, reply_to_message_id=None):
 
 def load_halts():
     if not os.path.exists(HALTS_FILE):
+        print("halts.json not found", flush=True)
         return []
 
-    with open(HALTS_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(HALTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    if isinstance(data, list):
-        return data
-    return []
+        if isinstance(data, list):
+            print(f"halts loaded: {len(data)} items", flush=True)
+            return data
+
+        print("halts.json is not a list", flush=True)
+        return []
+    except Exception as e:
+        print(f"load_halts error: {e}", flush=True)
+        return []
 
 
 def normalize_text(value):
@@ -61,6 +69,15 @@ def parse_query(text):
 
     if text.startswith("/start") or text.startswith("/help"):
         return "__HELP__"
+
+    if text.startswith("/haltscount"):
+        return "__HALTSCOUNT__"
+
+    if text.lower().startswith("/debughalt"):
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2:
+            return f"__DEBUGHALT__::{parts[1].strip()}"
+        return "__DEBUGHALT__::"
 
     if text.startswith("/"):
         return ""
@@ -92,22 +109,43 @@ def search_halt(query, halts):
     if not q:
         return None
 
+    # 1순위: 종목코드 정확히 일치
     for item in halts:
         symbol = normalize_text(item.get("symbol")).lower()
         if symbol == q:
             return item
 
+    # 2순위: 종목명 정확히 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if name == q:
             return item
 
+    # 3순위: 종목명 부분 일치
     for item in halts:
         name = normalize_text(item.get("name")).lower()
         if q in name:
             return item
 
     return None
+
+
+def debug_halt(query, halts):
+    q = normalize_text(query).lower()
+    if not q:
+        return "사용법: /debughalt IMMP"
+
+    symbols = [normalize_text(x.get("symbol")) for x in halts]
+    exists = any(normalize_text(x.get("symbol")).lower() == q for x in halts)
+
+    preview = ", ".join(symbols[:20]) if symbols else "(없음)"
+
+    return (
+        f"조회어: {query}\n"
+        f"halts 개수: {len(halts)}\n"
+        f"심볼 존재 여부: {'있음' if exists else '없음'}\n"
+        f"앞 20개 심볼: {preview}"
+    )
 
 
 def extract_message(update):
@@ -120,20 +158,32 @@ def extract_message(update):
 
 def handle_text(text):
     query = parse_query(text)
+    halts = load_halts()
 
     if query == "__HELP__":
         return (
             "사용 방법\n\n"
             "종목코드 또는 종목명을 입력하면 현재 거래정지 여부를 알려드립니다.\n\n"
             "예시:\n"
-            "SOXL\n"
-            "/halt SOXL"
+            "IMMP\n"
+            "/halt IMMP\n\n"
+            "디버그:\n"
+            "/haltscount\n"
+            "/debughalt IMMP"
         )
+
+    if query == "__HALTSCOUNT__":
+        symbols = [normalize_text(x.get("symbol")) for x in halts[:20]]
+        preview = ", ".join(symbols) if symbols else "(없음)"
+        return f"현재 halts 개수: {len(halts)}\n앞 20개 심볼: {preview}"
+
+    if query.startswith("__DEBUGHALT__::"):
+        raw = query.split("::", 1)[1]
+        return debug_halt(raw, halts)
 
     if not query:
         return None
 
-    halts = load_halts()
     item = search_halt(query, halts)
 
     if item:
@@ -171,6 +221,8 @@ def main():
 
                 if not chat_id or not text:
                     continue
+
+                print(f"received text: {text}", flush=True)
 
                 reply = handle_text(text)
                 if not reply:
