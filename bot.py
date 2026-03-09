@@ -7,7 +7,7 @@ import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-HALTS_URL = "https://raw.githubusercontent.com/K-CYL/telegram-halt-bot/main/halts.json"
+HALTS_URL = "https://raw.githubusercontent.com/K-CYL/nasdaqtrader_halt/main/halts.json"
 
 
 def get_updates(offset=None, timeout=30):
