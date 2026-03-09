@@ -9,6 +9,12 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 HALTS_URL = "https://raw.githubusercontent.com/K-CYL/nasdaqtrader_halt/main/halts.json"
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "K-CYL/nasdaqtrader_halt")
+GITHUB_WORKFLOW_ID = os.getenv("GITHUB_WORKFLOW_ID", "update_halt_state.yml")
+GITHUB_REF = os.getenv("GITHUB_REF", "main")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
+
 
 def get_updates(offset=None, timeout=30):
     params = {"timeout": timeout}
@@ -31,6 +37,39 @@ def send_message(chat_id, text, reply_to_message_id=None):
     r = requests.post(f"{BASE_URL}/sendMessage", json=payload, timeout=20)
     r.raise_for_status()
     return r.json()
+
+
+def is_admin_chat(chat_id):
+    return str(chat_id) == str(ADMIN_CHAT_ID)
+
+
+def trigger_github_workflow():
+    if not GITHUB_TOKEN:
+        return False, "GITHUB_TOKEN 이 설정되지 않았습니다."
+
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{GITHUB_WORKFLOW_ID}/dispatches"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {"ref": GITHUB_REF}
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=20)
+
+        if r.status_code == 204:
+            return True, f"GitHub Actions 실행 요청 완료: {GITHUB_REPO} / {GITHUB_WORKFLOW_ID} / ref={GITHUB_REF}"
+
+        try:
+            err = r.json()
+        except Exception:
+            err = r.text
+
+        return False, f"GitHub Actions 실행 실패 ({r.status_code})\n{err}"
+
+    except Exception as e:
+        return False, f"GitHub Actions 호출 오류: {e}"
 
 
 def load_halts():
@@ -99,6 +138,9 @@ def parse_query(text):
 
     if text.startswith("/start") or text.startswith("/help"):
         return ("HELP", "")
+
+    if text.startswith("/runhalt"):
+        return ("RUNHALT", "")
 
     if text.startswith("/haltscount"):
         return ("HALTSCOUNT", "")
@@ -405,8 +447,15 @@ def extract_message(update):
     return None
 
 
-def handle_text(text):
+def handle_text(text, chat_id=None):
     command, value = parse_query(text)
+
+    if command == "RUNHALT":
+        if not is_admin_chat(chat_id):
+            return "권한이 없습니다."
+        ok, msg = trigger_github_workflow()
+        return msg
+
     halts = load_halts()
 
     if command == "HELP":
@@ -417,6 +466,7 @@ def handle_text(text):
             "EMPG\n"
             "/halt EMPG\n\n"
             "명령어:\n"
+            "/runhalt - GitHub Actions 강제 실행\n"
             "/haltlist - 현재 거래정지 종목 목록\n"
             "/todayhalt - 오늘 발생한 halt\n"
             "/resume - 재개 예정/재개 정보 종목\n"
@@ -493,8 +543,9 @@ def main():
                     continue
 
                 print(f"received text: {text}", flush=True)
+                print(f"chat_id={chat_id}", flush=True)
 
-                reply = handle_text(text)
+                reply = handle_text(text, chat_id=chat_id)
                 if not reply:
                     continue
 
