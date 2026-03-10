@@ -451,8 +451,6 @@ def handle_text(text, chat_id=None):
     command, value = parse_query(text)
 
     if command == "RUNHALT":
-        if not is_admin_chat(chat_id):
-            return "권한이 없습니다."
         ok, msg = trigger_github_workflow()
         return msg
 
